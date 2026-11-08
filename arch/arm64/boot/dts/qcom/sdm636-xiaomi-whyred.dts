@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2020, Alexey Minnekhanov <alexey.min@gmail.com>
+ * Copyright (c) 2020, Martin Botka
+ *
+ * Xiaomi Redmi Note 5 Pro (whyred) - SDM636.
+ * Based on sdm660-xiaomi-lavender.dts and
+ * sdm636-sony-xperia-ganges-mermaid.dts.
+ *
+ * Ported to the Android Common Kernel (android12-5.10) from
+ * the CIP 5.10 port. The device tree is carried over as-is:
+ * sdhc_1 enabled, ramoops for the boot log, a /memory
+ * placeholder and bootargs placeholder matching the CAF DTB,
+ * pm660/pm660l includes, and a simple-framebuffer console
+ * on the bootloader splash (0x9d400000, 1080x2160) so the
+ * boot log is visible on the display. The CIP port never
+ * booted (stuck at the logo, empty pstore, in all seven
+ * milestones), so this ACK base is tried instead.
+ */
+
+/dts-v1/;
+
+#include "sdm630.dtsi"
+#include "pm660.dtsi"
+#include "pm660l.dtsi"
+
+/ {
+	model = "Xiaomi Redmi Note 5 Pro";
+	compatible = "xiaomi,whyred", "qcom,sdm636";
+
+	aliases {
+		serial0 = &blsp1_uart2;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		/* Placeholder cmdline, like the CAF DTB: the bootloader
+		 * overwrites bootargs with the boot image cmdline.
+		 * If it does not, the kernel still gets a console. */
+		bootargs = "console=ttyMSM0,115200,n8";
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* Bootloader splash framebuffer, 1080x2160x32bpp.
+		 * simplefb + fbcon render the kernel log on screen. */
+		framebuffer@9d400000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0x9d400000 0x0 0x8e6000>;
+			width = <1080>;
+			height = <2160>;
+			stride = <4320>;
+			format = "a8r8g8b8";
+			status = "okay";
+		};
+	};
+
+	/* Placeholder memory node, like the CAF DTB: the bootloader
+	 * fills reg with the real RAM base/size. Without this node
+	 * the kernel may boot with no memory described at all. */
+	memory {
+		device_type = "memory";
+		reg = <0x0 0x0 0x0 0x0>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		ramoops@a0000000 {
+			compatible = "ramoops";
+			reg = <0x0 0xa0000000 0x0 0x400000>;
+			console-size = <0x20000>;
+			record-size = <0x20000>;
+			ftrace-size = <0x0>;
+			pmsg-size = <0x20000>;
+		};
+
+		/* Bootloader splash framebuffer region, from the CAF DTB. */
+		splash_region@9d400000 {
+			reg = <0x0 0x9d400000 0x0 0x23ff000>;
+			label = "cont_splash_mem";
+		};
+	};
+};
+
+&blsp1_uart2 {
+	status = "okay";
+};
+
+&tlmm {
+	gpio-reserved-ranges = <8 4>;
+};
+
+&sdhc_1 {
+	status = "okay";
+};
