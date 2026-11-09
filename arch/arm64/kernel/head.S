@@ -184,14 +184,30 @@ SYM_CODE_END(primary_entry)
  */
 SYM_CODE_START_LOCAL(fill_fb)
 	mov	x0, #0x9d400000
-	movz	x2, #0x9800
-	movk	x2, #0x23, lsl #16	/* 1080*2160 pixels = 0x239800 */
+	movz	x2, #0x9880
+	movk	x2, #0x23, lsl #16	/* 1080*2160 pixels = 0x239880 */
 1:	str	w1, [x0], #4
 	subs	x2, x2, #1
 	b.ne	1b
+	/* DIAG (M27): bottom bar — marks this as a head.S/setup.c
+	 * checkpoint (breadcrumb stages use white top bars instead).
+	 * White bar, last 24 rows (rows 2136-2159, 24*1080 words).
+	 * Painted before the flush loop so it is flushed with the
+	 * fill. Uses w3/x0/x2; w1 (fill color) is untouched. */
+	mov	w3, #0xffff
+	movk	w3, #0xffff, lsl #16	/* white 0xffffffff */
+	movz	x0, #0xCD00
+	movk	x0, #0x9DCC, lsl #16	/* bottom bar start 0x9DCCCD00 */
+	movz	x2, #0x6540		/* 24*1080 = 25920 words */
+3:	str	w3, [x0], #4
+	subs	x2, x2, #1
+	b.ne	3b
 	mov	x0, #0x9d400000
-	movz	x2, #0x3980
-	movk	x2, #0x2, lsl #16	/* 64-byte cache lines = 0x23980 */
+	/* DIAG FIX (M27): the flush loop cleaned 0x23980 cache
+	 * lines, but the framebuffer needs 145800 lines (0x23988);
+	 * the last 8 lines (512 bytes) were never flushed. */
+	movz	x2, #0x3988
+	movk	x2, #0x2, lsl #16	/* 64-byte cache lines = 0x23988 */
 2:	dc	civac, x0
 	add	x0, x0, #64
 	subs	x2, x2, #1
@@ -538,13 +554,14 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	sub	x4, x4, x0			// the kernel virtual and
 	str_l	x4, kimage_voffset, x5		// physical mappings
 
-	/* DIAG: cyan = the three TTBR1 data accesses
+	/* DIAG: spring green = the three TTBR1 data accesses
 	 * (__fdt_pointer store, kimage_vaddr load, kimage_voffset
 	 * store) all succeeded (analysis round 4 proved those
 	 * three accesses cannot fault; M23 proved the kernel
-	 * reaches this point). */
-	movz	w1, #0xffff
-	movk	w1, #0xff00, lsl #16	/* opaque cyan 0xff00ffff */
+	 * reaches this point). M27: spring 0xff00ff7f replaces
+	 * cyan — every checkpoint now has a unique color. */
+	movz	w1, #0xff7f
+	movk	w1, #0xff00, lsl #16	/* opaque spring 0xff00ff7f */
 	bl	fill_fb
 
 	// Clear BSS
@@ -555,13 +572,15 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	bl	__pi_memset
 	dsb	ishst				// Make zero page visible to PTW
 
-	/* DIAG: magenta = BSS clear done (M24 proved the kernel
+	/* DIAG: violet = BSS clear done (M24 proved the kernel
 	 * reaches this point; the M24 spin after it is removed in
 	 * M25 so the kernel proceeds to start_kernel/setup_arch).
+	 * M27: violet 0xff8a2be2 replaces magenta — every
+	 * checkpoint now has a unique color.
 	 * fill_fb clobbers only x0/x1/x2/lr, all dead at this
 	 * point. */
-	movz	w1, #0x00ff
-	movk	w1, #0xffff, lsl #16	/* opaque magenta 0xffff00ff */
+	movz	w1, #0x2be2
+	movk	w1, #0xff8a, lsl #16	/* opaque violet 0xff8a2be2 */
 	bl	fill_fb
 
 #if defined(CONFIG_KASAN_GENERIC) || defined(CONFIG_KASAN_SW_TAGS)
@@ -585,14 +604,16 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 #endif
 	bl	switch_to_vhe			// Prefer VHE if possible
 	add	sp, sp, #16
-	/* DIAG: orange = __primary_switched done, about to enter
-	 * start_kernel. fill_fb clobbers x0/x1/x2 and lr, but none
+	/* DIAG: rose = __primary_switched done, about to enter
+	 * start_kernel. M27: rose 0xffff007f replaces orange —
+	 * every checkpoint now has a unique color.
+	 * fill_fb clobbers x0/x1/x2 and lr, but none
 	 * of those matter here (x29/x30 are zeroed right after).
-	 * If the screen stops at orange, the hang is in
-	 * start_kernel/setup_arch; if orange never appears, the
+	 * If the screen stops at rose, the hang is in
+	 * start_kernel/setup_arch; if rose never appears, the
 	 * hang is in __primary_switched (BSS clear or VHE). */
-	movz	w1, #0xa500
-	movk	w1, #0xffff, lsl #16	/* opaque orange 0xffffa500 */
+	movz	w1, #0x007f
+	movk	w1, #0xffff, lsl #16	/* opaque rose 0xffff007f */
 	bl	fill_fb
 	mov	x29, #0
 	mov	x30, #0

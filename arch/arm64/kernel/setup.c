@@ -309,6 +309,11 @@ static void __init fb_color_setup(u32 color)
 
 	for (i = 0; i < 1080 * 2160; i++)
 		fb[i] = color;
+	/* DIAG (M27): bottom bar — marks this as a head.S/setup.c
+	 * checkpoint (breadcrumb stages use white top bars instead).
+	 * White bar, last 24 rows. Flushed together with the fill. */
+	for (i = 2136 * 1080; i < 1080 * 2160; i++)
+		fb[i] = 0xffffffff;
 	__flush_dcache_area((void *)fb, (1080 * 2160) * sizeof(u32));
 }
 
@@ -345,6 +350,22 @@ static void __init fb_color_early(u32 color)
 			fb[i] = color;
 		early_iounmap((void __iomem *)fb, n * sizeof(u32));
 	}
+	/* DIAG (M27): bottom bar — marks this as a head.S/setup.c
+	 * checkpoint (breadcrumb stages use white top bars instead).
+	 * White bar, last 24 rows (103680 bytes, one 256 KiB slot). */
+	{
+		volatile u32 __iomem *bar;
+		u32 n = 24 * 1080;
+		u32 i;
+
+		bar = early_ioremap(0x9d400000 + (2136 * 1080) * sizeof(u32),
+				    n * sizeof(u32));
+		if (bar) {
+			for (i = 0; i < n; i++)
+				bar[i] = 0xffffffff;
+			early_iounmap((void __iomem *)bar, n * sizeof(u32));
+		}
+	}
 	dsb(sy);
 }
 
@@ -367,8 +388,10 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	early_fixmap_init();
 	early_ioremap_init();
 
-	/* DIAG: cyan = setup_arch entered (before setup_machine_fdt) */
-	fb_color_early(0xff00ffff);
+	/* DIAG: lime = setup_arch entered (before setup_machine_fdt).
+	 * M27: lime 0xff7fff00 replaces cyan — every checkpoint
+	 * now has a unique color. */
+	fb_color_early(0xff7fff00);
 
 	setup_machine_fdt(__fdt_pointer);
 
@@ -402,8 +425,10 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	paging_init();
 
-	/* white = paging_init done (linear map up) */
-	fb_color_setup(0xffffffff);
+	/* steel blue = paging_init done (linear map up).
+	 * M27: steel blue 0xff4682b4 replaces white — every
+	 * checkpoint now has a unique color. */
+	fb_color_setup(0xff4682b4);
 
 	acpi_table_upgrade();
 

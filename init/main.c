@@ -926,14 +926,29 @@ void __init init_dma_buf_kmem_pool(void);
  * repaint the splash framebuffer (phys 0x9d400000, 1080x2160,
  * a8r8g8b8) with a stage color: the final screen color shows how far
  * the kernel got even if ramoops does not survive the reboot.
+ *
+ * DIAG (M27): every checkpoint has a UNIQUE color (no repainting of
+ * magenta/cyan/orange), and each stage also paints N white
+ * horizontal bars at the top of the screen (N = stage number),
+ * readable independent of hue. head.S/setup.c checkpoints use a
+ * white bottom bar instead (see fill_fb / fb_color_setup).
  */
-static void __init fb_color(u32 color)
+static void __init fb_color(u32 color, unsigned int bars)
 {
 	volatile u32 *fb = (volatile u32 *)__va(0x9d400000);
 	u32 i;
+	unsigned int b, r;
 
 	for (i = 0; i < 1080 * 2160; i++)
 		fb[i] = color;
+	/* Top bars: bar b covers rows [b*36, b*36+24), full width.
+	 * Stage 8 covers rows 0-275 (top ~13% of the screen). */
+	for (b = 0; b < bars; b++) {
+		u32 start = b * 36 * 1080;
+
+		for (r = 0; r < 24 * 1080; r++)
+			fb[start + r] = 0xffffffff;
+	}
 	__flush_dcache_area((void *)fb, (1080 * 2160) * sizeof(u32));
 }
 
@@ -944,9 +959,9 @@ static void __init breadcrumb(u32 stage)
 	char msg[24];
 	int len;
 	static const u32 stage_colors[] = {
-		0xffff00ff, /* 1 magenta: setup_arch done */
-		0xff00ffff, /* 2 cyan: init_IRQ done */
-		0xffffa500, /* 3 orange: time_init done */
+		0xffff69b4, /* 1 hot pink: setup_arch done (M27, was magenta) */
+		0xff007fff, /* 2 azure: init_IRQ done (M27, was cyan) */
+		0xffff8c00, /* 3 tangerine: time_init done (M27, was orange) */
 		0xff800080, /* 4 purple: calibrate_delay done */
 		0xffffc0cb, /* 5 pink: about to rest_init */
 		0xff808000, /* 6 olive: smp_prepare_cpus done */
@@ -963,7 +978,7 @@ static void __init breadcrumb(u32 stage)
 	memcpy((void *)data, msg, len);
 	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
 	if (stage >= 1 && stage <= 8)
-		fb_color(stage_colors[stage - 1]);
+		fb_color(stage_colors[stage - 1], stage);
 }
 
 asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
