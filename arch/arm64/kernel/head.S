@@ -104,6 +104,30 @@ pe_header:
 	 */
 SYM_CODE_START(primary_entry)
 	bl	preserve_boot_args
+	/*
+	 * Early breadcrumb: write a valid pstore console record ("HEAD")
+	 * into the ramoops console zone (phys 0xa0000000) so we know the
+	 * kernel started executing at all. MMU is off here (boot protocol),
+	 * so these are direct physical stores. x21 (DTB) is preserved;
+	 * x0/x1 are scratch (preserve_boot_args already saved x0..x3).
+	 * The C breadcrumb in start_kernel() overwrites this record if
+	 * the kernel gets that far; if only "HEAD" survives, the kernel
+	 * started but hung before setup_arch() returned.
+	 */
+	mov	x0, #0xa0000000
+	movz	x1, #0x4244
+	movk	x1, #0x4347, lsl #16
+	str	w1, [x0]			/* sig "DBGC" */
+	mov	w1, #0
+	str	w1, [x0, #4]		/* start = 0 */
+	mov	w1, #4
+	str	w1, [x0, #8]		/* size = 4 */
+	movz	x1, #0x4548
+	movk	x1, #0x4441, lsl #16
+	str	w1, [x0, #12]		/* data "HEAD" */
+	dsb	sy
+	dc	civac, x0
+	dsb	sy
 	bl	init_kernel_el			// w0=cpu_boot_mode
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
