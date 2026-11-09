@@ -128,6 +128,29 @@ SYM_CODE_START(primary_entry)
 	dsb	sy
 	dc	civac, x0
 	dsb	sy
+	/*
+	 * Framebuffer breadcrumb: fill the splash framebuffer solid red.
+	 * If the screen turns red, the kernel started executing -- this
+	 * does not depend on ramoops surviving a reboot to recovery.
+	 * Framebuffer: phys 0x9d400000, 1080x2160, a8r8g8b8.
+	 * x21 (DTB) is preserved; x0/x1/x2 are scratch.
+	 */
+	mov	x0, #0x9d400000
+	movz	x1, #0x0000
+	movk	x1, #0xffff, lsl #16	/* opaque red 0xffff0000 */
+	movz	x2, #0x9800
+	movk	x2, #0x23, lsl #16	/* 1080*2160 pixels = 0x239800 */
+1:	str	w1, [x0], #4
+	subs	x2, x2, #1
+	b.ne	1b
+	mov	x0, #0x9d400000
+	movz	x2, #0x3980
+	movk	x2, #0x2, lsl #16	/* 64-byte cache lines in 0x8e6000 = 0x23980 */
+2:	dc	civac, x0
+	add	x0, x0, #64
+	subs	x2, x2, #1
+	b.ne	2b
+	dsb	sy
 	bl	init_kernel_el			// w0=cpu_boot_mode
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
