@@ -296,6 +296,21 @@ u64 cpu_logical_map(unsigned int cpu)
 	return __cpu_logical_map[cpu];
 }
 
+/*
+ * Framebuffer color breadcrumb (whyred 5.10 bringup): repaint the
+ * splash framebuffer (phys 0x9d400000, 1080x2160, a8r8g8b8) with
+ * the given color. Only valid after paging_init() (linear map up).
+ */
+static void __init fb_color_setup(u32 color)
+{
+	volatile u32 *fb = (volatile u32 *)__va(0x9d400000);
+	u32 i;
+
+	for (i = 0; i < 1080 * 2160; i++)
+		fb[i] = color;
+	__flush_dcache_area((void *)fb, (1080 * 2160) * sizeof(u32));
+}
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	init_mm.start_code = (unsigned long) _text;
@@ -346,6 +361,9 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	arm64_memblock_init();
 
 	paging_init();
+
+	/* white = paging_init done (linear map up) */
+	fb_color_setup(0xffffffff);
 
 	acpi_table_upgrade();
 
