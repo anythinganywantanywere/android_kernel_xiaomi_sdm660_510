@@ -441,7 +441,15 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 1:
 	ldr_l	x4, idmap_ptrs_per_pgd
 	mov	x5, x3				// __pa(__idmap_text_start)
-	adr_l	x6, __idmap_text_end		// __pa(__idmap_text_end)
+	/* DIAG: extend the idmap past __idmap_text_end to 0x9d600000
+	 * (end of the splash framebuffer's first 2MB) so the
+	 * framebuffer is identity-mapped and a color breadcrumb can
+	 * be written from __primary_switched after the MMU is on
+	 * (via TTBR0, virtual == physical). The idmap is only used
+	 * for the early transition and is discarded by paging_init,
+	 * so mapping the extra RAM here is harmless. */
+	movz	x6, #0x0000
+	movk	x6, #0x9d60, lsl #16		// vend = 0x9d600000
 
 	map_memory x0, x1, x3, x6, x7, x3, x4, x10, x11, x12, x13, x14
 
@@ -489,6 +497,16 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	add	sp, x4, #THREAD_SIZE
 	adr_l	x5, init_task
 	msr	sp_el0, x5			// Save thread_info
+
+	/* DIAG: white = __primary_switched reached (MMU on). The
+	 * framebuffer is identity-mapped in the idmap, so fill_fb
+	 * (physical stores to 0x9d400000) works via TTBR0.
+	 * x0 (__PHYS_OFFSET) is saved/restored around the call. */
+	str	x0, [sp, #-16]!
+	movz	w1, #0xffff
+	movk	w1, #0xffff, lsl #16		/* opaque white 0xffffffff */
+	bl	fill_fb
+	ldr	x0, [sp], #16
 
 	adr_l	x8, vectors			// load VBAR_EL1 with virtual
 	msr	vbar_el1, x8			// vector table address
