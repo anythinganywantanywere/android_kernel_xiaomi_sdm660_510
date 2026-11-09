@@ -538,19 +538,14 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	sub	x4, x4, x0			// the kernel virtual and
 	str_l	x4, kimage_voffset, x5		// physical mappings
 
-	/* DIAG (M23): cyan = the three TTBR1 data accesses
+	/* DIAG: cyan = the three TTBR1 data accesses
 	 * (__fdt_pointer store, kimage_vaddr load, kimage_voffset
-	 * store) all succeeded. Analysis round 4 proved those
-	 * three accesses cannot fault, so if cyan never appears
-	 * here the problem is provenance/observation, not a kernel
-	 * fault. Spin forever after painting cyan so the result
-	 * is unmissable: a stable cyan screen means the kernel
-	 * reached this point; a stable white screen means it
-	 * genuinely did not. Do not proceed to BSS clear. */
+	 * store) all succeeded (analysis round 4 proved those
+	 * three accesses cannot fault; M23 proved the kernel
+	 * reaches this point). */
 	movz	w1, #0xffff
 	movk	w1, #0xff00, lsl #16	/* opaque cyan 0xff00ffff */
 	bl	fill_fb
-0:	b	0b				/* spin forever (M23 diagnostic) */
 
 	// Clear BSS
 	adr_l	x0, __bss_start
@@ -559,6 +554,17 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	sub	x2, x2, x0
 	bl	__pi_memset
 	dsb	ishst				// Make zero page visible to PTW
+
+	/* DIAG (M24): magenta = BSS clear done. Analysis round 5
+	 * excluded the BSS clear by positive evidence, so magenta
+	 * should appear; if it does not, the proof is wrong in a
+	 * way only a live run can show. Spin forever after
+	 * painting magenta so the result is unmissable. fill_fb
+	 * clobbers only x0/x1/x2/lr, all dead at this point. */
+	movz	w1, #0x00ff
+	movk	w1, #0xffff, lsl #16	/* opaque magenta 0xffff00ff */
+	bl	fill_fb
+0:	b	0b				/* spin forever (M24 diagnostic) */
 
 #if defined(CONFIG_KASAN_GENERIC) || defined(CONFIG_KASAN_SW_TAGS)
 	bl	kasan_early_init
