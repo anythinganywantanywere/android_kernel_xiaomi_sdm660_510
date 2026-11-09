@@ -58,9 +58,16 @@
 	/* Placeholder memory node, like the CAF DTB: the bootloader
 	 * fills reg with the real RAM base/size. Without this node
 	 * the kernel may boot with no memory described at all. */
+	/* RAM is hard-coded instead of relying on the bootloader to fill
+	 * this placeholder: if LK leaves reg as 0,0,0,0 the kernel sees
+	 * no memory at all and hangs in setup_arch before any breadcrumb
+	 * can be written. 4 GB at 0x80000000; LK overwrites this with the
+	 * real size when it does fill the node, and 4 GB is safe on both
+	 * the 4 GB and 6 GB whyred variants (the kernel just sees less
+	 * RAM on a 6 GB unit). */
 	memory {
 		device_type = "memory";
-		reg = <0x0 0x0 0x0 0x0>;
+		reg = <0x0 0x80000000 0x1 0x0>;
 	};
 
 	reserved-memory {
