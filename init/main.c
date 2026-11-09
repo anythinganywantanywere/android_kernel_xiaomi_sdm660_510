@@ -921,13 +921,35 @@ void __init init_dma_buf_kmem_pool(void);
  * setup_arch(), so this is only safe after that point. Each call
  * overwrites the previous marker; the surviving one is the last stage
  * reached before the hang.
+ *
+ * The pstore record may be lost when rebooting to recovery, so also
+ * repaint the splash framebuffer (phys 0x9d400000, 1080x2160,
+ * a8r8g8b8) with a stage color: the final screen color shows how far
+ * the kernel got even if ramoops does not survive the reboot.
  */
+static void __init fb_color(u32 color)
+{
+	volatile u32 *fb = (volatile u32 *)__va(0x9d400000);
+	u32 i;
+
+	for (i = 0; i < 1080 * 2160; i++)
+		fb[i] = color;
+	__flush_dcache_area((void *)fb, (1080 * 2160) * sizeof(u32));
+}
+
 static void __init breadcrumb(u32 stage)
 {
 	volatile u32 *hdr = (volatile u32 *)__va(0xa0000000);
 	volatile char *data = (volatile char *)__va(0xa0000000 + 12);
 	char msg[24];
 	int len;
+	static const u32 stage_colors[] = {
+		0xffff00ff, /* 1 magenta: setup_arch done */
+		0xff00ffff, /* 2 cyan: init_IRQ done */
+		0xffffa500, /* 3 orange: time_init done */
+		0xff800080, /* 4 purple: calibrate_delay done */
+		0xffffc0cb, /* 5 pink: about to rest_init */
+	};
 
 	len = snprintf(msg, sizeof(msg), "BOOT-STAGE=%u\n", stage);
 	if (len <= 0)
@@ -937,6 +959,8 @@ static void __init breadcrumb(u32 stage)
 	hdr[2] = (u32)len;   /* size */
 	memcpy((void *)data, msg, len);
 	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
+	if (stage >= 1 && stage <= 5)
+		fb_color(stage_colors[stage - 1]);
 }
 
 asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
