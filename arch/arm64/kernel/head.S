@@ -567,6 +567,15 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 #endif
 	bl	switch_to_vhe			// Prefer VHE if possible
 	add	sp, sp, #16
+	/* DIAG: orange = __primary_switched done, about to enter
+	 * start_kernel. fill_fb clobbers x0/x1/x2 and lr, but none
+	 * of those matter here (x29/x30 are zeroed right after).
+	 * If the screen stops at orange, the hang is in
+	 * start_kernel/setup_arch; if orange never appears, the
+	 * hang is in __primary_switched (BSS clear or VHE). */
+	movz	w1, #0xa500
+	movk	w1, #0xffff, lsl #16	/* opaque orange 0xffffa500 */
+	bl	fill_fb
 	mov	x29, #0
 	mov	x30, #0
 	b	start_kernel
