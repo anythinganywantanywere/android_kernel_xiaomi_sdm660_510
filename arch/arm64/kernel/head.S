@@ -141,9 +141,13 @@ SYM_CODE_START(primary_entry)
 	bl	fill_fb
 	bl	init_kernel_el			// w0=cpu_boot_mode
 	/* green = init_kernel_el done */
+	/* DIAG FIX: fill_fb clobbers x0, but w0 (cpu_boot_mode) is
+	 * needed by set_cpu_boot_mode_flag below. Save/restore it. */
+	mov	x19, x0
 	movz	w1, #0xff00
 	movk	w1, #0xff00, lsl #16	/* opaque green 0xff00ff00 */
 	bl	fill_fb
+	mov	x0, x19
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
 	bl	set_cpu_boot_mode_flag
@@ -160,9 +164,16 @@ SYM_CODE_START(primary_entry)
 	 */
 	bl	__cpu_setup			// initialise processor
 	/* yellow = __cpu_setup done */
+	/* DIAG FIX: fill_fb clobbers x0, but x0 holds the SCTLR
+	 * value __cpu_setup returned, which __enable_mmu writes
+	 * via set_sctlr_el1. Without this save/restore, SCTLR_EL1
+	 * gets 0x9DCE6000 (end of framebuffer) and the MMU never
+	 * turns on. */
+	mov	x19, x0
 	movz	w1, #0xff00
 	movk	w1, #0xffff, lsl #16	/* opaque yellow 0xffffff00 */
 	bl	fill_fb
+	mov	x0, x19
 	b	__primary_switch
 SYM_CODE_END(primary_entry)
 
