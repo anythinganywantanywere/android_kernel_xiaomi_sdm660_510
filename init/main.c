@@ -949,6 +949,9 @@ static void __init breadcrumb(u32 stage)
 		0xffffa500, /* 3 orange: time_init done */
 		0xff800080, /* 4 purple: calibrate_delay done */
 		0xffffc0cb, /* 5 pink: about to rest_init */
+		0xff808000, /* 6 olive: smp_prepare_cpus done */
+		0xff000080, /* 7 navy: smp_init done */
+		0xff008080, /* 8 teal: do_basic_setup done */
 	};
 
 	len = snprintf(msg, sizeof(msg), "BOOT-STAGE=%u\n", stage);
@@ -959,7 +962,7 @@ static void __init breadcrumb(u32 stage)
 	hdr[2] = (u32)len;   /* size */
 	memcpy((void *)data, msg, len);
 	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
-	if (stage >= 1 && stage <= 5)
+	if (stage >= 1 && stage <= 8)
 		fb_color(stage_colors[stage - 1]);
 }
 
@@ -1622,6 +1625,9 @@ static noinline void __init kernel_init_freeable(void)
 
 	smp_prepare_cpus(setup_max_cpus);
 
+	/* DIAG (M26): olive = smp_prepare_cpus done */
+	breadcrumb(6);
+
 	workqueue_init();
 
 	init_mm_internals();
@@ -1631,6 +1637,10 @@ static noinline void __init kernel_init_freeable(void)
 	lockup_detector_init();
 
 	smp_init();
+
+	/* DIAG (M26): navy = smp_init done (secondary bringup finished) */
+	breadcrumb(7);
+
 	sched_init_smp();
 
 	padata_init();
@@ -1639,6 +1649,9 @@ static noinline void __init kernel_init_freeable(void)
 	page_ext_init();
 
 	do_basic_setup();
+
+	/* DIAG (M26): teal = do_basic_setup done (all initcalls returned) */
+	breadcrumb(8);
 
 	kunit_run_all_tests();
 
