@@ -538,6 +538,16 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	sub	x4, x4, x0			// the kernel virtual and
 	str_l	x4, kimage_voffset, x5		// physical mappings
 
+	/* DIAG: cyan = the three first-time TTBR1 data accesses
+	 * (__fdt_pointer store, kimage_vaddr load, kimage_voffset
+	 * store) all succeeded. If cyan never appears, the fault
+	 * is in one of those three accesses (see analysis round 3).
+	 * fill_fb clobbers x0/x1/x2, all reloaded by the BSS-clear
+	 * setup right after; x4/x5/x21/x23 untouched. */
+	movz	w1, #0xffff
+	movk	w1, #0xff00, lsl #16	/* opaque cyan 0xff00ffff */
+	bl	fill_fb
+
 	// Clear BSS
 	adr_l	x0, __bss_start
 	mov	x1, xzr
