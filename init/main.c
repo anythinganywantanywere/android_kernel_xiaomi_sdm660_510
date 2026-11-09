@@ -104,6 +104,7 @@
 #include <asm/setup.h>
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
+#include <asm/memory.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/initcall.h>
@@ -911,6 +912,33 @@ static void __init print_kernel_cmdline(const char *cmdline)
 
 void __init init_sync_kmem_pool(void);
 void __init init_dma_buf_kmem_pool(void);
+
+/*
+ * Boot-stage breadcrumb for the whyred 5.10 bringup: write a valid
+ * pstore console record into the ramoops console zone (phys 0xa0000000)
+ * so the furthest stage reached can be read back from the 4.19 kernel
+ * via /sys/fs/pstore/console-ramoops-0. The linear map is up after
+ * setup_arch(), so this is only safe after that point. Each call
+ * overwrites the previous marker; the surviving one is the last stage
+ * reached before the hang.
+ */
+static void __init breadcrumb(u32 stage)
+{
+	volatile u32 *hdr = (volatile u32 *)__va(0xa0000000);
+	volatile char *data = (volatile char *)__va(0xa0000000 + 12);
+	char msg[24];
+	int len;
+
+	len = snprintf(msg, sizeof(msg), "BOOT-STAGE=%u\n", stage);
+	if (len <= 0)
+		return;
+	hdr[0] = 0x43474244; /* PERSISTENT_RAM_SIG ("DBGC") */
+	hdr[1] = 0;          /* start */
+	hdr[2] = (u32)len;   /* size */
+	memcpy((void *)data, msg, len);
+	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
+}
+
 asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 {
 	char *command_line;
@@ -934,6 +962,7 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	pr_notice("%s", linux_banner);
 	early_security_init();
 	setup_arch(&command_line);
+	breadcrumb(1); /* setup_arch done */
 	setup_boot_config(command_line);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
@@ -1011,6 +1040,7 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	/* init some links before init_ISA_irqs() */
 	early_irq_init();
 	init_IRQ();
+	breadcrumb(2); /* init_IRQ done */
 	tick_init();
 	rcu_init_nohz();
 	init_timers();
@@ -1019,6 +1049,7 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	timekeeping_init();
 	kfence_init();
 	time_init();
+	breadcrumb(3); /* time_init done */
 
 	/*
 	 * For best initial stack canary entropy, prepare it after:
@@ -1075,6 +1106,7 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 		late_time_init();
 	sched_clock_init();
 	calibrate_delay();
+	breadcrumb(4); /* calibrate_delay done */
 
 	arch_cpu_finalize_init();
 
@@ -1112,6 +1144,7 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	kcsan_init();
 
 	/* Do the rest non-__init'ed, we're now alive */
+	breadcrumb(5); /* about to rest_init */
 	arch_call_rest_init();
 
 	prevent_tail_call_optimization();
