@@ -96,3 +96,15 @@
 &sdhc_1 {
 	status = "okay";
 };
+
+/ {
+	/* The bootloader (LK) does not set CNTFRQ_EL0 on whyred, so the
+	 * architected timer has no frequency without this. Without a
+	 * frequency, arch_timer fails to initialise, no timer interrupt
+	 * ever fires, and calibrate_delay() spins forever waiting for a
+	 * jiffy -- the phone hangs on the logo before any initcall.
+	 * 19200000 Hz (19.2 MHz XO) matches the CAF DTB value. */
+	timer {
+		clock-frequency = <19200000>;
+	};
+};
