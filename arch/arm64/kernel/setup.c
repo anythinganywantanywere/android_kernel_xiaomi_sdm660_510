@@ -45,6 +45,7 @@
 #include <asm/setup.h>
 #include <asm/smp_plat.h>
 #include <asm/cacheflush.h>
+#include <asm/early_ioremap.h>
 #include <asm/tlbflush.h>
 #include <asm/traps.h>
 #include <asm/efi.h>
@@ -311,6 +312,26 @@ static void __init fb_color_setup(u32 color)
 	__flush_dcache_area((void *)fb, (1080 * 2160) * sizeof(u32));
 }
 
+/*
+ * Early variant: same repaint, but via early_ioremap, usable in
+ * setup_arch() before the linear map exists (after
+ * early_ioremap_init, before setup_machine_fdt). Signals that the
+ * kernel reached setup_arch at all.
+ */
+static void __init fb_color_early(u32 color)
+{
+	volatile u32 __iomem *fb;
+	u32 i;
+
+	fb = early_ioremap(0x9d400000, 1080 * 2160 * 4);
+	if (!fb)
+		return;
+	for (i = 0; i < 1080 * 2160; i++)
+		fb[i] = color;
+	__flush_dcache_area((void *)fb, (1080 * 2160) * sizeof(u32));
+	early_iounmap((void __iomem *)fb, 1080 * 2160 * 4);
+}
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	init_mm.start_code = (unsigned long) _text;
@@ -329,6 +350,9 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	early_fixmap_init();
 	early_ioremap_init();
+
+	/* DIAG: cyan = setup_arch entered (before setup_machine_fdt) */
+	fb_color_early(0xff00ffff);
 
 	setup_machine_fdt(__fdt_pointer);
 
