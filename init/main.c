@@ -927,13 +927,14 @@ void __init init_dma_buf_kmem_pool(void);
  * a8r8g8b8) with a stage color: the final screen color shows how far
  * the kernel got even if ramoops does not survive the reboot.
  *
- * DIAG (M27): every checkpoint has a UNIQUE color (no repainting of
- * magenta/cyan/orange), and each stage also paints N white
- * horizontal bars at the top of the screen (N = stage number),
- * readable independent of hue. head.S/setup.c checkpoints use a
- * white bottom bar instead (see fill_fb / fb_color_setup).
+ * DIAG (M30): fb_color/breadcrumb are intentionally NOT __init.
+ * Stages 11/12/16/17 run after free_initmem() in kernel_init(),
+ * so marking them __init would free the code they call into.
+ * (M29 found this the hard way: stage 11 never displayed, and
+ * the cause may have been this use-after-free, not a real hang.)
+ * head.S/setup.c checkpoints stay __init: they only run early.
  */
-static void __init fb_color(u32 color, unsigned int bars)
+static void fb_color(u32 color, unsigned int bars)
 {
 	volatile u32 *fb = (volatile u32 *)__va(0x9d400000);
 	u32 i;
@@ -942,7 +943,7 @@ static void __init fb_color(u32 color, unsigned int bars)
 	for (i = 0; i < 1080 * 2160; i++)
 		fb[i] = color;
 	/* Top bars: bar b covers rows [b*36, b*36+24), full width.
-	 * Stage 8 covers rows 0-275 (top ~13% of the screen). */
+	 * Stage 17 covers rows 0-599 (top ~28% of the screen). */
 	for (b = 0; b < bars; b++) {
 		u32 start = b * 36 * 1080;
 
@@ -952,7 +953,7 @@ static void __init fb_color(u32 color, unsigned int bars)
 	__flush_dcache_area((void *)fb, (1080 * 2160) * sizeof(u32));
 }
 
-static void __init breadcrumb(u32 stage)
+static void breadcrumb(u32 stage)
 {
 	volatile u32 *hdr = (volatile u32 *)__va(0xa0000000);
 	volatile char *data = (volatile char *)__va(0xa0000000 + 12);
@@ -974,6 +975,8 @@ static void __init breadcrumb(u32 stage)
 		0xffdc143c, /* 13 crimson: kernel_init_freeable done (M29) */
 		0xff006400, /* 14 dark green: back in kernel_init (M29) */
 		0xff40e0d0, /* 15 turquoise: async init synced (M29) */
+		0xffa0522d, /* 16 sienna: initmem freed + readonly (M30) */
+		0xffda70d6, /* 17 orchid: PTI finalized (M30) */
 	};
 
 	len = snprintf(msg, sizeof(msg), "BOOT-STAGE=%u\n", stage);
@@ -984,7 +987,7 @@ static void __init breadcrumb(u32 stage)
 	hdr[2] = (u32)len;   /* size */
 	memcpy((void *)data, msg, len);
 	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
-	if (stage >= 1 && stage <= 15)
+	if (stage >= 1 && stage <= 17)
 		fb_color(stage_colors[stage - 1], stage);
 }
 
@@ -1565,11 +1568,19 @@ static int __ref kernel_init(void *unused)
 	free_initmem();
 	mark_readonly();
 
+	/* DIAG (M30): sienna = init memory freed and text/rodata
+	 * marked read-only, about to finalize PTI. */
+	breadcrumb(16);
+
 	/*
 	 * Kernel mappings are now finalized - update the userspace page-table
 	 * to finalize PTI.
 	 */
 	pti_finalize();
+
+	/* DIAG (M30): orchid = PTI finalized, about to set
+	 * SYSTEM_RUNNING and process sysctl args. */
+	breadcrumb(17);
 
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
