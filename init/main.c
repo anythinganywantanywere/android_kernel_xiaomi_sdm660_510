@@ -1026,7 +1026,15 @@ static void breadcrumb(u32 stage)
  * and stop. The backlight device is the pm660l WLED, registered
  * under the name "backlight" (DT label). If it is not found,
  * the work function skips silently; the pstore/framebuffer
- * breadcrumb writes still run. */
+ * breadcrumb writes still run.
+ * M40: the first two firings always pulse, even if PID 1
+ * already has a userspace mm. In M39 the heartbeat went
+ * straight to "full and stop" at the first firing because
+ * /init is already running by then (proven in M34), and the
+ * backlight was already at full, so nothing visibly changed.
+ * Forcing two pulses first proves the timer, the workqueue
+ * and the backlight control all work; from the third firing
+ * on, the PID 1 check decides as before. */
 static struct timer_list hb_timer;
 static struct work_struct hb_work;
 static struct backlight_device *hb_backlight;
@@ -1061,8 +1069,24 @@ static void hb_backlight_work(struct work_struct *work)
 static void hb_callback(struct timer_list *t)
 {
 	static bool toggle;
+	static unsigned int fires;
 	struct task_struct *init_task;
 	bool userspace = false;
+
+	fires++;
+
+	/* M40: guarantee a visible pulse. Always re-arm for the
+	 * first two firings, even if PID 1 already has a userspace
+	 * mm. /init is already running by the first firing (M34),
+	 * so without this the heartbeat goes straight to "full and
+	 * stop" and nothing visibly changes. */
+	if (fires < 3) {
+		toggle = !toggle;
+		breadcrumb(toggle ? 19 : 20);
+		schedule_work(&hb_work);
+		mod_timer(&hb_timer, jiffies + msecs_to_jiffies(5000));
+		return;
+	}
 
 	rcu_read_lock();
 	init_task = find_task_by_vpid(1);
