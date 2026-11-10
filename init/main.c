@@ -943,7 +943,7 @@ static void fb_color(u32 color, unsigned int bars)
 	for (i = 0; i < 1080 * 2160; i++)
 		fb[i] = color;
 	/* Top bars: bar b covers rows [b*36, b*36+24), full width.
-	 * Stage 20 covers rows 0-707 (top ~33% of the screen). */
+	 * Stage 21 covers rows 0-743 (top ~34% of the screen). */
 	for (b = 0; b < bars; b++) {
 		u32 start = b * 36 * 1080;
 
@@ -980,6 +980,7 @@ static void breadcrumb(u32 stage)
 		0xffff00ff, /* 18 magenta: free_initmem done, before mark_readonly (M31) */
 		0xff1e90ff, /* 19 dodger blue: heartbeat 5s after stage 11 (M32) */
 		0xff00fa9a, /* 20 medium spring green: heartbeat alternate (M33) */
+		0xffff1493, /* 21 deep pink: PID 1 has a userspace mm, /init is running (M34) */
 	};
 
 	len = snprintf(msg, sizeof(msg), "BOOT-STAGE=%u\n", stage);
@@ -990,24 +991,41 @@ static void breadcrumb(u32 stage)
 	hdr[2] = (u32)len;   /* size */
 	memcpy((void *)data, msg, len);
 	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
-	if (stage >= 1 && stage <= 20)
+	if (stage >= 1 && stage <= 21)
 		fb_color(stage_colors[stage - 1], stage);
 }
 
-/* DIAG (M32/M33): heartbeat timer. Armed in kernel_init() right
- * after breadcrumb(11), fires 5s later and paints stage 19. M33
- * makes it repeating: each firing alternates stage 19/20 and
- * re-arms for another 5s. If the screen keeps alternating
- * blue/green every 5s, the kernel is alive and scheduling
- * continuously. If it freezes on one color, the kernel died
- * after that point. If it stays gold, the kernel hung before
- * the first firing. breadcrumb() only does memory writes +
- * cache flush, so it is safe in timer (softirq) context. */
+/* DIAG (M32/M33/M34): heartbeat timer. Armed in kernel_init()
+ * right after breadcrumb(11), fires 5s later and paints stage 19.
+ * M33 made it repeating: each firing alternates stage 19/20 and
+ * re-arms for another 5s. M34 adds a userspace check: each firing
+ * looks up PID 1 and tests whether it has a userspace mm. If it
+ * does, /init has exec'd and is running in userspace, so paint
+ * stage 21 (deep pink) once and stop the heartbeat. If PID 1 is
+ * still a kernel thread (mm == NULL), the exec has not completed:
+ * keep alternating 19/20. This distinguishes "kernel_init stuck
+ * in run_init_process" (keeps alternating) from "/init running
+ * but display/USB broken" (turns deep pink). breadcrumb() only
+ * does memory writes + cache flush, so it is safe in timer
+ * (softirq) context; the PID lookup is RCU-protected. */
 static struct timer_list hb_timer;
 
 static void hb_callback(struct timer_list *t)
 {
 	static bool toggle;
+	struct task_struct *init_task;
+	bool userspace = false;
+
+	rcu_read_lock();
+	init_task = find_task_by_vpid(1);
+	if (init_task && init_task->mm)
+		userspace = true;
+	rcu_read_unlock();
+
+	if (userspace) {
+		breadcrumb(21);
+		return;
+	}
 
 	toggle = !toggle;
 	breadcrumb(toggle ? 19 : 20);
