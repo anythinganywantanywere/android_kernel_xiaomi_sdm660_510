@@ -967,6 +967,10 @@ static void __init breadcrumb(u32 stage)
 		0xff808000, /* 6 olive: smp_prepare_cpus done */
 		0xff000080, /* 7 navy: smp_init done */
 		0xff008080, /* 8 teal: do_basic_setup done */
+		0xffff7f50, /* 9 coral: console_on_rootfs done (M28) */
+		0xff4b0082, /* 10 indigo: rootfs setup done (M28) */
+		0xffffd700, /* 11 gold: about to execute /init (M28) */
+		0xff87ceeb, /* 12 sky: ramdisk /init exec failed (M28) */
 	};
 
 	len = snprintf(msg, sizeof(msg), "BOOT-STAGE=%u\n", stage);
@@ -977,7 +981,7 @@ static void __init breadcrumb(u32 stage)
 	hdr[2] = (u32)len;   /* size */
 	memcpy((void *)data, msg, len);
 	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
-	if (stage >= 1 && stage <= 8)
+	if (stage >= 1 && stage <= 12)
 		fb_color(stage_colors[stage - 1], stage);
 }
 
@@ -1565,12 +1569,19 @@ static int __ref kernel_init(void *unused)
 
 	do_sysctl_args();
 
+	/* DIAG (M28): gold = kernel_init_freeable done and cleanup
+	 * finished, about to execute the ramdisk /init. */
+	breadcrumb(11);
+
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
 			return 0;
 		pr_err("Failed to execute %s (error %d)\n",
 		       ramdisk_execute_command, ret);
+		/* DIAG (M28): sky = ramdisk /init failed to execute
+		 * (falling back to the other init candidates). */
+		breadcrumb(12);
 	}
 
 	/*
@@ -1672,6 +1683,10 @@ static noinline void __init kernel_init_freeable(void)
 
 	console_on_rootfs();
 
+	/* DIAG (M28): coral = console_on_rootfs done, about to
+	 * check the ramdisk init / mount the rootfs. */
+	breadcrumb(9);
+
 	/*
 	 * check if there is an early userspace init.  If yes, let it do all
 	 * the work
@@ -1680,6 +1695,11 @@ static noinline void __init kernel_init_freeable(void)
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
 	}
+
+	/* DIAG (M28): indigo = rootfs setup done (prepare_namespace
+	 * ran or was skipped because the ramdisk has /init),
+	 * about to load keys and return to kernel_init. */
+	breadcrumb(10);
 
 	/*
 	 * Ok, we have completed the initial bootup, and
