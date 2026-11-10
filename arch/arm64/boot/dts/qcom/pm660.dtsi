@@ -46,5 +46,9 @@
 			interrupt-controller;
 			#interrupt-cells = <2>;
 		};
+
+		pm660_regulators: regulators {
+			compatible = "qcom,pm660-regulators";
+		};
 	};
 };

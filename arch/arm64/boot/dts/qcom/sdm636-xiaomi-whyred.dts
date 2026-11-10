@@ -141,6 +141,18 @@
 			label = "cont_splash_mem";
 		};
 	};
+
+	/* Battery / system rail, 3.7 V. Input rail for the PMIC
+	 * regulators; the bootloader already powers it. */
+	vph_pwr: vph-pwr-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vph_pwr";
+		regulator-min-microvolt = <3700000>;
+		regulator-max-microvolt = <3700000>;
+
+		regulator-always-on;
+		regulator-boot-on;
+	};
 };
 
 &blsp1_uart2 {
@@ -153,6 +165,76 @@
 
 &sdhc_1 {
 	status = "okay";
+};
+
+/* PMIC regulators for the USB PHY supply chain, values from
+ * mainline. These are SPMI regulators (qcom_spmi-regulator);
+ * the RPM regulator driver in this kernel has no pm660 data,
+ * so the mainline &rpm_requests nodes are not used. The l7
+ * input is fed from vph_pwr instead of the boost (bob)
+ * regulator, which the SPMI driver does not implement. */
+&pm660l_regulators {
+	vreg_s2b_1p05: s2 {
+		regulator-min-microvolt = <1050000>;
+		regulator-max-microvolt = <1050000>;
+		regulator-enable-ramp-delay = <200>;
+		vdd_s2-supply = <&vph_pwr>;
+	};
+
+	vreg_l1b_0p925: l1 {
+		regulator-min-microvolt = <800000>;
+		regulator-max-microvolt = <925000>;
+		regulator-enable-ramp-delay = <250>;
+		regulator-allow-set-load;
+		vdd_l1_l9_l10-supply = <&vreg_s2b_1p05>;
+	};
+
+	vreg_l7b_3p125: l7 {
+		regulator-min-microvolt = <2700000>;
+		regulator-max-microvolt = <3125000>;
+		regulator-enable-ramp-delay = <250>;
+		vdd_l3_l5_l7_l8-supply = <&vph_pwr>;
+	};
+};
+
+&pm660_regulators {
+	vreg_s4a_2p04: s4 {
+		regulator-min-microvolt = <1805000>;
+		regulator-max-microvolt = <2040000>;
+		regulator-enable-ramp-delay = <200>;
+		regulator-always-on;
+		vdd_s3-supply = <&vph_pwr>;
+	};
+
+	vreg_l10a_1p8: l10 {
+		regulator-min-microvolt = <1780000>;
+		regulator-max-microvolt = <1950000>;
+		regulator-enable-ramp-delay = <250>;
+		regulator-allow-set-load;
+		regulator-system-load = <14000>;
+		vdd_l8_l9_l10_l11_l12_l13_l14-supply = <&vreg_s4a_2p04>;
+	};
+};
+
+&qusb2phy0 {
+	vdd-supply = <&vreg_l1b_0p925>;
+	vdda-pll-supply = <&vreg_l10a_1p8>;
+	vdda-phy-dpdm-supply = <&vreg_l7b_3p125>;
+
+	status = "okay";
+};
+
+&usb3 {
+	qcom,select-utmi-as-pipe-clk;
+
+	status = "okay";
+};
+
+&usb3_dwc3 {
+	maximum-speed = "high-speed";
+	phys = <&qusb2phy0>;
+	phy-names = "usb2-phy";
+	dr_mode = "peripheral";
 };
 
 / {
