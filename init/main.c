@@ -28,6 +28,7 @@
 #include <linux/initrd.h>
 #include <linux/memblock.h>
 #include <linux/acpi.h>
+#include <linux/backlight.h>
 #include <linux/bootconfig.h>
 #include <linux/console.h>
 #include <linux/nmi.h>
@@ -45,6 +46,7 @@
 #include <linux/moduleparam.h>
 #include <linux/kallsyms.h>
 #include <linux/writeback.h>
+#include <linux/workqueue.h>
 #include <linux/cpu.h>
 #include <linux/cpuset.h>
 #include <linux/cgroup.h>
@@ -1007,8 +1009,54 @@ static void breadcrumb(u32 stage)
  * in run_init_process" (keeps alternating) from "/init running
  * but display/USB broken" (turns deep pink). breadcrumb() only
  * does memory writes + cache flush, so it is safe in timer
- * (softirq) context; the PID lookup is RCU-protected. */
+ * (softirq) context; the PID lookup is RCU-protected.
+ *
+ * DIAG (M39): the framebuffer heartbeat is INVISIBLE now that
+ * DRM/MSM owns the display (M38): the driver took over the
+ * framebuffer and blanked it, so the breadcrumb colors never
+ * show. The heartbeat now also drives the BACKLIGHT, which the
+ * user can see in a video as a brightness pulse. The timer
+ * callback runs in softirq and cannot sleep, and the backlight
+ * API (set_brightness -> update_status -> WLED SPMI writes)
+ * sleeps, so the callback only schedules a work_struct; the
+ * work function runs in process context and does the actual
+ * brightness change. Behaviour mirrors M34: while PID 1 has
+ * no userspace mm, alternate DIM (~10%) / BRIGHT (100%) every
+ * 5s; once PID 1 has a userspace mm, set FULL brightness once
+ * and stop. The backlight device is the pm660l WLED, registered
+ * under the name "backlight" (DT label). If it is not found,
+ * the work function skips silently; the pstore/framebuffer
+ * breadcrumb writes still run. */
 static struct timer_list hb_timer;
+static struct work_struct hb_work;
+static struct backlight_device *hb_backlight;
+static bool hb_userspace;
+
+static void hb_backlight_work(struct work_struct *work)
+{
+	struct backlight_device *bd = hb_backlight;
+	static bool dim;
+	int brightness;
+
+	if (!bd) {
+		bd = backlight_device_get_by_name("backlight");
+		if (!bd)
+			return;
+		hb_backlight = bd;
+	}
+
+	if (hb_userspace) {
+		/* /init is running: full brightness, done. */
+		backlight_device_set_brightness(bd, bd->props.max_brightness);
+		return;
+	}
+
+	/* Kernel alive, /init not yet running: pulse dim/bright. */
+	dim = !dim;
+	brightness = dim ? bd->props.max_brightness / 10
+			 : bd->props.max_brightness;
+	backlight_device_set_brightness(bd, brightness);
+}
 
 static void hb_callback(struct timer_list *t)
 {
@@ -1024,11 +1072,14 @@ static void hb_callback(struct timer_list *t)
 
 	if (userspace) {
 		breadcrumb(21);
+		hb_userspace = true;
+		schedule_work(&hb_work);
 		return;
 	}
 
 	toggle = !toggle;
 	breadcrumb(toggle ? 19 : 20);
+	schedule_work(&hb_work);
 	mod_timer(&hb_timer, jiffies + msecs_to_jiffies(5000));
 }
 
@@ -1644,6 +1695,9 @@ static int __ref kernel_init(void *unused)
 	/* DIAG (M32): arm the heartbeat. If we are still stuck at
 	 * stage 11 five seconds from now, the timer fires and
 	 * repaints the screen dodger blue (stage 19). */
+	/* DIAG (M39): the backlight work runs the brightness pulse
+	 * from process context (the backlight API sleeps). */
+	INIT_WORK(&hb_work, hb_backlight_work);
 	timer_setup(&hb_timer, hb_callback, 0);
 	mod_timer(&hb_timer, jiffies + msecs_to_jiffies(5000));
 
