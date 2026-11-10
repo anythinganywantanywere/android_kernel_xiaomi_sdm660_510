@@ -928,7 +928,7 @@ void __init init_dma_buf_kmem_pool(void);
  * the kernel got even if ramoops does not survive the reboot.
  *
  * DIAG (M30): fb_color/breadcrumb are intentionally NOT __init.
- * Stages 11/12/16/17 run after free_initmem() in kernel_init(),
+ * Stages 11/12/16/17/18 run after free_initmem() in kernel_init(),
  * so marking them __init would free the code they call into.
  * (M29 found this the hard way: stage 11 never displayed, and
  * the cause may have been this use-after-free, not a real hang.)
@@ -943,7 +943,7 @@ static void fb_color(u32 color, unsigned int bars)
 	for (i = 0; i < 1080 * 2160; i++)
 		fb[i] = color;
 	/* Top bars: bar b covers rows [b*36, b*36+24), full width.
-	 * Stage 17 covers rows 0-599 (top ~28% of the screen). */
+	 * Stage 18 covers rows 0-635 (top ~29% of the screen). */
 	for (b = 0; b < bars; b++) {
 		u32 start = b * 36 * 1080;
 
@@ -977,6 +977,7 @@ static void breadcrumb(u32 stage)
 		0xff40e0d0, /* 15 turquoise: async init synced (M29) */
 		0xffa0522d, /* 16 sienna: initmem freed + readonly (M30) */
 		0xffda70d6, /* 17 orchid: PTI finalized (M30) */
+		0xffff00ff, /* 18 magenta: free_initmem done, before mark_readonly (M31) */
 	};
 
 	len = snprintf(msg, sizeof(msg), "BOOT-STAGE=%u\n", stage);
@@ -987,7 +988,7 @@ static void breadcrumb(u32 stage)
 	hdr[2] = (u32)len;   /* size */
 	memcpy((void *)data, msg, len);
 	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
-	if (stage >= 1 && stage <= 17)
+	if (stage >= 1 && stage <= 18)
 		fb_color(stage_colors[stage - 1], stage);
 }
 
@@ -1566,6 +1567,13 @@ static int __ref kernel_init(void *unused)
 	ftrace_free_init_mem();
 	kgdb_free_init_mem();
 	free_initmem();
+
+	/* DIAG (M31): magenta = free_initmem done, about to
+	 * mark text/rodata read-only. Splits the 15-16 gap:
+	 * stop at 15 = hang in free_initmem (or the kprobe/
+	 * ftrace/kgdb frees just before it); stop at 18 =
+	 * hang in mark_readonly. */
+	breadcrumb(18);
 	mark_readonly();
 
 	/* DIAG (M30): sienna = init memory freed and text/rodata
