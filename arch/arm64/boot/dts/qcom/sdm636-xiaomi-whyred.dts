@@ -153,6 +153,23 @@
 		regulator-always-on;
 		regulator-boot-on;
 	};
+
+	/*
+	 * This is here until we have a driver for QPNP LCDB regulator.
+	 * It can emulate both positive LDO and negative NCP supplies for panel.
+	 */
+	lcdb_fixed: lcdb-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "lcdb";
+		/*
+		 * Actual range for LCDB is 4.0 - 6.0V, but
+		 * stock bootloader sets voltage to 5.4 V
+		 */
+		regulator-min-microvolt = <5400000>;
+		regulator-max-microvolt = <5400000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
 };
 
 &blsp1_uart2 {
@@ -161,6 +178,34 @@
 
 &tlmm {
 	gpio-reserved-ranges = <8 4>;
+
+	lcd_reset_active: lcd-reset-active-state {
+		function = "gpio";
+		pins = "gpio53";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	lcd_reset_sleep: lcd-reset-sleep-state {
+		pins = "gpio53";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	mdss_te_active: mdss-te-active-state {
+		pins = "gpio59";
+		function = "mdp_vsync";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	mdss_te_sleep: mdss-te-sleep-state {
+		pins = "gpio59";
+		function = "mdp_vsync";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
 };
 
 &sdhc_1 {
@@ -206,12 +251,34 @@
 		vdd_s3-supply = <&vph_pwr>;
 	};
 
+	vreg_s5a_1p35: s5 {
+		regulator-min-microvolt = <1224000>;
+		regulator-max-microvolt = <1350000>;
+		regulator-enable-ramp-delay = <200>;
+		vdd_s5-supply = <&vph_pwr>;
+	};
+
+	vreg_l1a_1p225: l1 {
+		regulator-min-microvolt = <1150000>;
+		regulator-max-microvolt = <1250000>;
+		regulator-enable-ramp-delay = <250>;
+		regulator-allow-set-load;
+		vdd_l1_l6_l7-supply = <&vreg_s5a_1p35>;
+	};
+
 	vreg_l10a_1p8: l10 {
 		regulator-min-microvolt = <1780000>;
 		regulator-max-microvolt = <1950000>;
 		regulator-enable-ramp-delay = <250>;
 		regulator-allow-set-load;
 		regulator-system-load = <14000>;
+		vdd_l8_l9_l10_l11_l12_l13_l14-supply = <&vreg_s4a_2p04>;
+	};
+
+	vreg_l11a_1p8: l11 {
+		regulator-min-microvolt = <1780000>;
+		regulator-max-microvolt = <1950000>;
+		regulator-enable-ramp-delay = <250>;
 		vdd_l8_l9_l10_l11_l12_l13_l14-supply = <&vreg_s4a_2p04>;
 	};
 };
@@ -235,6 +302,68 @@
 	phys = <&qusb2phy0>;
 	phy-names = "usb2-phy";
 	dr_mode = "peripheral";
+};
+
+&mdss {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	status = "okay";
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	vdd-supply = <&vreg_l1b_0p925>;
+	vdda-supply = <&vreg_l1a_1p225>;
+
+	panel: panel@0 {
+		compatible = "tianma,tl060fvms47-00";
+		reg = <0>;
+
+		backlight = <&pm660l_wled>;
+		reset-gpios = <&tlmm 53 GPIO_ACTIVE_LOW>;
+
+		vddio-supply = <&vreg_l11a_1p8>;
+		vddneg-supply = <&lcdb_fixed>;
+		vddpos-supply = <&lcdb_fixed>;
+
+		pinctrl-0 = <&lcd_reset_active &mdss_te_active>;
+		pinctrl-1 = <&lcd_reset_sleep &mdss_te_sleep>;
+		pinctrl-names = "default", "sleep";
+
+		width-mm = <68>;
+		height-mm = <136>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	data-lanes = <0 1 2 3>;
+	remote-endpoint = <&panel_in>;
+};
+
+&mdss_dsi0_phy {
+	vcca-supply = <&vreg_l1b_0p925>;
+
+	status = "okay";
+};
+
+&mmss_smmu {
+	status = "okay";
+};
+
+&pm660l_wled {
+	qcom,switching-freq = <800>;
+	qcom,current-limit-microamp = <20000>;
+	qcom,num-strings = <2>;
+
+	status = "okay";
 };
 
 / {
