@@ -104,58 +104,11 @@ pe_header:
 	 */
 SYM_CODE_START(primary_entry)
 	bl	preserve_boot_args
-	/*
-	 * Early breadcrumb: write a valid pstore console record ("HEAD")
-	 * into the ramoops console zone (phys 0xa0000000) so we know the
-	 * kernel started executing at all. MMU is off here (boot protocol),
-	 * so these are direct physical stores. x21 (DTB) is preserved;
-	 * x0/x1 are scratch (preserve_boot_args already saved x0..x3).
-	 * The C breadcrumb in start_kernel() overwrites this record if
-	 * the kernel gets that far; if only "HEAD" survives, the kernel
-	 * started but hung before setup_arch() returned.
-	 */
-	mov	x0, #0xa0000000
-	movz	x1, #0x4244
-	movk	x1, #0x4347, lsl #16
-	str	w1, [x0]			/* sig "DBGC" */
-	mov	w1, #0
-	str	w1, [x0, #4]		/* start = 0 */
-	mov	w1, #4
-	str	w1, [x0, #8]		/* size = 4 */
-	movz	x1, #0x4548
-	movk	x1, #0x4441, lsl #16
-	str	w1, [x0, #12]		/* data "HEAD" */
-	dsb	sy
-	dc	civac, x0
-	dsb	sy
-	/*
-	 * Framebuffer color breadcrumb: fill the splash framebuffer
-	 * (phys 0x9d400000, 1080x2160, a8r8g8b8) with the color in w1.
-	 * Red here = primary_entry reached. Later stages overwrite it
-	 * with green/blue/yellow, so the final color shows how far the
-	 * kernel got. x21 (DTB) and x23 (KASLR offset) are preserved;
-	 * x0/x1/x2 are scratch.
-	 */
-	movz	w1, #0x0000
-	movk	w1, #0xffff, lsl #16	/* opaque red 0xffff0000 */
-	bl	fill_fb
 	bl	init_kernel_el			// w0=cpu_boot_mode
-	/* green = init_kernel_el done */
-	/* DIAG FIX: fill_fb clobbers x0, but w0 (cpu_boot_mode) is
-	 * needed by set_cpu_boot_mode_flag below. Save/restore it. */
-	mov	x19, x0
-	movz	w1, #0xff00
-	movk	w1, #0xff00, lsl #16	/* opaque green 0xff00ff00 */
-	bl	fill_fb
-	mov	x0, x19
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
 	bl	set_cpu_boot_mode_flag
 	bl	__create_page_tables
-	/* blue = __create_page_tables done */
-	movz	w1, #0x00ff
-	movk	w1, #0xff00, lsl #16	/* opaque blue 0xff0000ff */
-	bl	fill_fb
 	/*
 	 * The following calls CPU setup code, see arch/arm64/mm/proc.S for
 	 * details.
@@ -163,58 +116,8 @@ SYM_CODE_START(primary_entry)
 	 * the TCR will have been set.
 	 */
 	bl	__cpu_setup			// initialise processor
-	/* yellow = __cpu_setup done */
-	/* DIAG FIX: fill_fb clobbers x0, but x0 holds the SCTLR
-	 * value __cpu_setup returned, which __enable_mmu writes
-	 * via set_sctlr_el1. Without this save/restore, SCTLR_EL1
-	 * gets 0x9DCE6000 (end of framebuffer) and the MMU never
-	 * turns on. */
-	mov	x19, x0
-	movz	w1, #0xff00
-	movk	w1, #0xffff, lsl #16	/* opaque yellow 0xffffff00 */
-	bl	fill_fb
-	mov	x0, x19
 	b	__primary_switch
 SYM_CODE_END(primary_entry)
-
-/*
- * Fill the splash framebuffer (phys 0x9d400000, 1080x2160, a8r8g8b8)
- * with the color in w1. Clobbers x0/x1/x2. Preserves x21/x23.
- * Only valid while the MMU is off (physical stores).
- */
-SYM_CODE_START_LOCAL(fill_fb)
-	mov	x0, #0x9d400000
-	movz	x2, #0x9880
-	movk	x2, #0x23, lsl #16	/* 1080*2160 pixels = 0x239880 */
-1:	str	w1, [x0], #4
-	subs	x2, x2, #1
-	b.ne	1b
-	/* DIAG (M27): bottom bar — marks this as a head.S/setup.c
-	 * checkpoint (breadcrumb stages use white top bars instead).
-	 * White bar, last 24 rows (rows 2136-2159, 24*1080 words).
-	 * Painted before the flush loop so it is flushed with the
-	 * fill. Uses w3/x0/x2; w1 (fill color) is untouched. */
-	mov	w3, #0xffff
-	movk	w3, #0xffff, lsl #16	/* white 0xffffffff */
-	movz	x0, #0xCD00
-	movk	x0, #0x9DCC, lsl #16	/* bottom bar start 0x9DCCCD00 */
-	movz	x2, #0x6540		/* 24*1080 = 25920 words */
-3:	str	w3, [x0], #4
-	subs	x2, x2, #1
-	b.ne	3b
-	mov	x0, #0x9d400000
-	/* DIAG FIX (M27): the flush loop cleaned 0x23980 cache
-	 * lines, but the framebuffer needs 145800 lines (0x23988);
-	 * the last 8 lines (512 bytes) were never flushed. */
-	movz	x2, #0x3988
-	movk	x2, #0x2, lsl #16	/* 64-byte cache lines = 0x23988 */
-2:	dc	civac, x0
-	add	x0, x0, #64
-	subs	x2, x2, #1
-	b.ne	2b
-	dsb	sy
-	ret
-SYM_CODE_END(fill_fb)
 
 /*
  * Preserve the arguments passed by the bootloader in x0 .. x3
@@ -468,17 +371,7 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 1:
 	ldr_l	x4, idmap_ptrs_per_pgd
 	mov	x5, x3				// __pa(__idmap_text_start)
-	/* DIAG: extend the idmap past __idmap_text_end to 0x9DE00000
-	 * (end of the full splash framebuffer, 0x9d400000 + 0x8E6000
-	 * rounded up to a 2MB boundary) so the framebuffer is
-	 * identity-mapped and a color breadcrumb can be written
-	 * from __primary_switched after the MMU is on (via TTBR0,
-	 * virtual == physical). The idmap is only used for the
-	 * early transition and is discarded by paging_init, so
-	 * mapping the extra RAM here is harmless. The full range
-	 * still fits in the 12KB idmap (one PUD page). */
-	movz	x6, #0x0000
-	movk	x6, #0x9de0, lsl #16		// vend = 0x9DE00000
+	adr_l	x6, __idmap_text_end		// __pa(__idmap_text_end)
 
 	map_memory x0, x1, x3, x6, x7, x3, x4, x10, x11, x12, x13, x14
 
@@ -527,16 +420,6 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	adr_l	x5, init_task
 	msr	sp_el0, x5			// Save thread_info
 
-	/* DIAG: white = __primary_switched reached (MMU on). The
-	 * framebuffer is identity-mapped in the idmap, so fill_fb
-	 * (physical stores to 0x9d400000) works via TTBR0.
-	 * x0 (__PHYS_OFFSET) is saved/restored around the call. */
-	str	x0, [sp, #-16]!
-	movz	w1, #0xffff
-	movk	w1, #0xffff, lsl #16		/* opaque white 0xffffffff */
-	bl	fill_fb
-	ldr	x0, [sp], #16
-
 	adr_l	x8, vectors			// load VBAR_EL1 with virtual
 	msr	vbar_el1, x8			// vector table address
 	isb
@@ -554,16 +437,6 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	sub	x4, x4, x0			// the kernel virtual and
 	str_l	x4, kimage_voffset, x5		// physical mappings
 
-	/* DIAG: spring green = the three TTBR1 data accesses
-	 * (__fdt_pointer store, kimage_vaddr load, kimage_voffset
-	 * store) all succeeded (analysis round 4 proved those
-	 * three accesses cannot fault; M23 proved the kernel
-	 * reaches this point). M27: spring 0xff00ff7f replaces
-	 * cyan — every checkpoint now has a unique color. */
-	movz	w1, #0xff7f
-	movk	w1, #0xff00, lsl #16	/* opaque spring 0xff00ff7f */
-	bl	fill_fb
-
 	// Clear BSS
 	adr_l	x0, __bss_start
 	mov	x1, xzr
@@ -572,26 +445,12 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	bl	__pi_memset
 	dsb	ishst				// Make zero page visible to PTW
 
-	/* DIAG: violet = BSS clear done (M24 proved the kernel
-	 * reaches this point; the M24 spin after it is removed in
-	 * M25 so the kernel proceeds to start_kernel/setup_arch).
-	 * M27: violet 0xff8a2be2 replaces magenta — every
-	 * checkpoint now has a unique color.
-	 * fill_fb clobbers only x0/x1/x2/lr, all dead at this
-	 * point. */
-	movz	w1, #0x2be2
-	movk	w1, #0xff8a, lsl #16	/* opaque violet 0xff8a2be2 */
-	bl	fill_fb
-
 #if defined(CONFIG_KASAN_GENERIC) || defined(CONFIG_KASAN_SW_TAGS)
 	bl	kasan_early_init
 #endif
-	/* DIAG: 4.19 does not call early_fdt_map/init_feature_override
-	 * here in __primary_switched; if one of them hangs on whyred,
-	 * skipping them should let the kernel reach setup_arch. */
-	/* mov	x0, x21				// pass FDT address in x0 */
-	/* bl	early_fdt_map			// Try mapping the FDT early */
-	/* bl	init_feature_override		// Parse cpu feature overrides */
+	mov	x0, x21				// pass FDT address in x0
+	bl	early_fdt_map			// Try mapping the FDT early
+	bl	init_feature_override		// Parse cpu feature overrides
 #ifdef CONFIG_RANDOMIZE_BASE
 	tst	x23, ~(MIN_KIMG_ALIGN - 1)	// already running randomized?
 	b.ne	0f
@@ -604,17 +463,6 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 #endif
 	bl	switch_to_vhe			// Prefer VHE if possible
 	add	sp, sp, #16
-	/* DIAG: rose = __primary_switched done, about to enter
-	 * start_kernel. M27: rose 0xffff007f replaces orange —
-	 * every checkpoint now has a unique color.
-	 * fill_fb clobbers x0/x1/x2 and lr, but none
-	 * of those matter here (x29/x30 are zeroed right after).
-	 * If the screen stops at rose, the hang is in
-	 * start_kernel/setup_arch; if rose never appears, the
-	 * hang is in __primary_switched (BSS clear or VHE). */
-	movz	w1, #0x007f
-	movk	w1, #0xffff, lsl #16	/* opaque rose 0xffff007f */
-	bl	fill_fb
 	mov	x29, #0
 	mov	x30, #0
 	b	start_kernel

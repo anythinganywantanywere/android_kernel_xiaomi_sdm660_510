@@ -28,7 +28,6 @@
 #include <linux/initrd.h>
 #include <linux/memblock.h>
 #include <linux/acpi.h>
-#include <linux/backlight.h>
 #include <linux/bootconfig.h>
 #include <linux/console.h>
 #include <linux/nmi.h>
@@ -46,7 +45,6 @@
 #include <linux/moduleparam.h>
 #include <linux/kallsyms.h>
 #include <linux/writeback.h>
-#include <linux/workqueue.h>
 #include <linux/cpu.h>
 #include <linux/cpuset.h>
 #include <linux/cgroup.h>
@@ -106,7 +104,6 @@
 #include <asm/setup.h>
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
-#include <asm/memory.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/initcall.h>
@@ -914,199 +911,6 @@ static void __init print_kernel_cmdline(const char *cmdline)
 
 void __init init_sync_kmem_pool(void);
 void __init init_dma_buf_kmem_pool(void);
-
-/*
- * Boot-stage breadcrumb for the whyred 5.10 bringup: write a valid
- * pstore console record into the ramoops console zone (phys 0xa0000000)
- * so the furthest stage reached can be read back from the 4.19 kernel
- * via /sys/fs/pstore/console-ramoops-0. The linear map is up after
- * setup_arch(), so this is only safe after that point. Each call
- * overwrites the previous marker; the surviving one is the last stage
- * reached before the hang.
- *
- * The pstore record may be lost when rebooting to recovery, so also
- * repaint the splash framebuffer (phys 0x9d400000, 1080x2160,
- * a8r8g8b8) with a stage color: the final screen color shows how far
- * the kernel got even if ramoops does not survive the reboot.
- *
- * DIAG (M30): fb_color/breadcrumb are intentionally NOT __init.
- * Stages 11/12/16/17/18 run after free_initmem() in kernel_init(),
- * so marking them __init would free the code they call into.
- * (M29 found this the hard way: stage 11 never displayed, and
- * the cause may have been this use-after-free, not a real hang.)
- * head.S/setup.c checkpoints stay __init: they only run early.
- */
-static void fb_color(u32 color, unsigned int bars)
-{
-	volatile u32 *fb = (volatile u32 *)__va(0x9d400000);
-	u32 i;
-	unsigned int b, r;
-
-	for (i = 0; i < 1080 * 2160; i++)
-		fb[i] = color;
-	/* Top bars: bar b covers rows [b*36, b*36+24), full width.
-	 * Stage 21 covers rows 0-743 (top ~34% of the screen). */
-	for (b = 0; b < bars; b++) {
-		u32 start = b * 36 * 1080;
-
-		for (r = 0; r < 24 * 1080; r++)
-			fb[start + r] = 0xffffffff;
-	}
-	__flush_dcache_area((void *)fb, (1080 * 2160) * sizeof(u32));
-}
-
-static void breadcrumb(u32 stage)
-{
-	volatile u32 *hdr = (volatile u32 *)__va(0xa0000000);
-	volatile char *data = (volatile char *)__va(0xa0000000 + 12);
-	char msg[24];
-	int len;
-	static const u32 stage_colors[] = {
-		0xffff69b4, /* 1 hot pink: setup_arch done (M27, was magenta) */
-		0xff007fff, /* 2 azure: init_IRQ done (M27, was cyan) */
-		0xffff8c00, /* 3 tangerine: time_init done (M27, was orange) */
-		0xff800080, /* 4 purple: calibrate_delay done */
-		0xffffc0cb, /* 5 pink: about to rest_init */
-		0xff808000, /* 6 olive: smp_prepare_cpus done */
-		0xff000080, /* 7 navy: smp_init done */
-		0xff008080, /* 8 teal: do_basic_setup done */
-		0xffff7f50, /* 9 coral: console_on_rootfs done (M28) */
-		0xff4b0082, /* 10 indigo: rootfs setup done (M28) */
-		0xffffd700, /* 11 gold: about to execute /init (M28) */
-		0xff87ceeb, /* 12 sky: ramdisk /init exec failed (M28) */
-		0xffdc143c, /* 13 crimson: kernel_init_freeable done (M29) */
-		0xff006400, /* 14 dark green: back in kernel_init (M29) */
-		0xff40e0d0, /* 15 turquoise: async init synced (M29) */
-		0xffa0522d, /* 16 sienna: initmem freed + readonly (M30) */
-		0xffda70d6, /* 17 orchid: PTI finalized (M30) */
-		0xffff00ff, /* 18 magenta: free_initmem done, before mark_readonly (M31) */
-		0xff1e90ff, /* 19 dodger blue: heartbeat 5s after stage 11 (M32) */
-		0xff00fa9a, /* 20 medium spring green: heartbeat alternate (M33) */
-		0xffff1493, /* 21 deep pink: PID 1 has a userspace mm, /init is running (M34) */
-	};
-
-	len = snprintf(msg, sizeof(msg), "BOOT-STAGE=%u\n", stage);
-	if (len <= 0)
-		return;
-	hdr[0] = 0x43474244; /* PERSISTENT_RAM_SIG ("DBGC") */
-	hdr[1] = 0;          /* start */
-	hdr[2] = (u32)len;   /* size */
-	memcpy((void *)data, msg, len);
-	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
-	if (stage >= 1 && stage <= 21)
-		fb_color(stage_colors[stage - 1], stage);
-}
-
-/* DIAG (M32/M33/M34): heartbeat timer. Armed in kernel_init()
- * right after breadcrumb(11), fires 5s later and paints stage 19.
- * M33 made it repeating: each firing alternates stage 19/20 and
- * re-arms for another 5s. M34 adds a userspace check: each firing
- * looks up PID 1 and tests whether it has a userspace mm. If it
- * does, /init has exec'd and is running in userspace, so paint
- * stage 21 (deep pink) once and stop the heartbeat. If PID 1 is
- * still a kernel thread (mm == NULL), the exec has not completed:
- * keep alternating 19/20. This distinguishes "kernel_init stuck
- * in run_init_process" (keeps alternating) from "/init running
- * but display/USB broken" (turns deep pink). breadcrumb() only
- * does memory writes + cache flush, so it is safe in timer
- * (softirq) context; the PID lookup is RCU-protected.
- *
- * DIAG (M39): the framebuffer heartbeat is INVISIBLE now that
- * DRM/MSM owns the display (M38): the driver took over the
- * framebuffer and blanked it, so the breadcrumb colors never
- * show. The heartbeat now also drives the BACKLIGHT, which the
- * user can see in a video as a brightness pulse. The timer
- * callback runs in softirq and cannot sleep, and the backlight
- * API (set_brightness -> update_status -> WLED SPMI writes)
- * sleeps, so the callback only schedules a work_struct; the
- * work function runs in process context and does the actual
- * brightness change. Behaviour mirrors M34: while PID 1 has
- * no userspace mm, alternate DIM (~10%) / BRIGHT (100%) every
- * 5s; once PID 1 has a userspace mm, set FULL brightness once
- * and stop. The backlight device is the pm660l WLED, registered
- * under the name "backlight" (DT label). If it is not found,
- * the work function skips silently; the pstore/framebuffer
- * breadcrumb writes still run.
- * M40: the first two firings always pulse, even if PID 1
- * already has a userspace mm. In M39 the heartbeat went
- * straight to "full and stop" at the first firing because
- * /init is already running by then (proven in M34), and the
- * backlight was already at full, so nothing visibly changed.
- * Forcing two pulses first proves the timer, the workqueue
- * and the backlight control all work; from the third firing
- * on, the PID 1 check decides as before. */
-static struct timer_list hb_timer;
-static struct work_struct hb_work;
-static struct backlight_device *hb_backlight;
-static bool hb_userspace;
-
-static void hb_backlight_work(struct work_struct *work)
-{
-	struct backlight_device *bd = hb_backlight;
-	static bool dim;
-	int brightness;
-
-	if (!bd) {
-		bd = backlight_device_get_by_name("backlight");
-		if (!bd)
-			return;
-		hb_backlight = bd;
-	}
-
-	if (hb_userspace) {
-		/* /init is running: full brightness, done. */
-		backlight_device_set_brightness(bd, bd->props.max_brightness);
-		return;
-	}
-
-	/* Kernel alive, /init not yet running: pulse dim/bright. */
-	dim = !dim;
-	brightness = dim ? bd->props.max_brightness / 10
-			 : bd->props.max_brightness;
-	backlight_device_set_brightness(bd, brightness);
-}
-
-static void hb_callback(struct timer_list *t)
-{
-	static bool toggle;
-	static unsigned int fires;
-	struct task_struct *init_task;
-	bool userspace = false;
-
-	fires++;
-
-	/* M40: guarantee a visible pulse. Always re-arm for the
-	 * first two firings, even if PID 1 already has a userspace
-	 * mm. /init is already running by the first firing (M34),
-	 * so without this the heartbeat goes straight to "full and
-	 * stop" and nothing visibly changes. */
-	if (fires < 3) {
-		toggle = !toggle;
-		breadcrumb(toggle ? 19 : 20);
-		schedule_work(&hb_work);
-		mod_timer(&hb_timer, jiffies + msecs_to_jiffies(5000));
-		return;
-	}
-
-	rcu_read_lock();
-	init_task = find_task_by_vpid(1);
-	if (init_task && init_task->mm)
-		userspace = true;
-	rcu_read_unlock();
-
-	if (userspace) {
-		breadcrumb(21);
-		hb_userspace = true;
-		schedule_work(&hb_work);
-		return;
-	}
-
-	toggle = !toggle;
-	breadcrumb(toggle ? 19 : 20);
-	schedule_work(&hb_work);
-	mod_timer(&hb_timer, jiffies + msecs_to_jiffies(5000));
-}
-
 asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 {
 	char *command_line;
@@ -1130,7 +934,6 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	pr_notice("%s", linux_banner);
 	early_security_init();
 	setup_arch(&command_line);
-	breadcrumb(1); /* setup_arch done */
 	setup_boot_config(command_line);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
@@ -1208,7 +1011,6 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	/* init some links before init_ISA_irqs() */
 	early_irq_init();
 	init_IRQ();
-	breadcrumb(2); /* init_IRQ done */
 	tick_init();
 	rcu_init_nohz();
 	init_timers();
@@ -1217,7 +1019,6 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	timekeeping_init();
 	kfence_init();
 	time_init();
-	breadcrumb(3); /* time_init done */
 
 	/*
 	 * For best initial stack canary entropy, prepare it after:
@@ -1274,7 +1075,6 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 		late_time_init();
 	sched_clock_init();
 	calibrate_delay();
-	breadcrumb(4); /* calibrate_delay done */
 
 	arch_cpu_finalize_init();
 
@@ -1312,7 +1112,6 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	kcsan_init();
 
 	/* Do the rest non-__init'ed, we're now alive */
-	breadcrumb(5); /* about to rest_init */
 	arch_call_rest_init();
 
 	prevent_tail_call_optimization();
@@ -1670,40 +1469,19 @@ static int __ref kernel_init(void *unused)
 	int ret;
 
 	kernel_init_freeable();
-	/* DIAG (M29): dark green = kernel_init_freeable returned,
-	 * about to wait for async init and free init memory. */
-	breadcrumb(14);
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
-	/* DIAG (M29): turquoise = async init synced, about to
-	 * free init memory and finalize the mappings. */
-	breadcrumb(15);
 	kprobe_free_init_mem();
 	ftrace_free_init_mem();
 	kgdb_free_init_mem();
 	free_initmem();
-
-	/* DIAG (M31): magenta = free_initmem done, about to
-	 * mark text/rodata read-only. Splits the 15-16 gap:
-	 * stop at 15 = hang in free_initmem (or the kprobe/
-	 * ftrace/kgdb frees just before it); stop at 18 =
-	 * hang in mark_readonly. */
-	breadcrumb(18);
 	mark_readonly();
-
-	/* DIAG (M30): sienna = init memory freed and text/rodata
-	 * marked read-only, about to finalize PTI. */
-	breadcrumb(16);
 
 	/*
 	 * Kernel mappings are now finalized - update the userspace page-table
 	 * to finalize PTI.
 	 */
 	pti_finalize();
-
-	/* DIAG (M30): orchid = PTI finalized, about to set
-	 * SYSTEM_RUNNING and process sysctl args. */
-	breadcrumb(17);
 
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
@@ -1712,28 +1490,12 @@ static int __ref kernel_init(void *unused)
 
 	do_sysctl_args();
 
-	/* DIAG (M28): gold = kernel_init_freeable done and cleanup
-	 * finished, about to execute the ramdisk /init. */
-	breadcrumb(11);
-
-	/* DIAG (M32): arm the heartbeat. If we are still stuck at
-	 * stage 11 five seconds from now, the timer fires and
-	 * repaints the screen dodger blue (stage 19). */
-	/* DIAG (M39): the backlight work runs the brightness pulse
-	 * from process context (the backlight API sleeps). */
-	INIT_WORK(&hb_work, hb_backlight_work);
-	timer_setup(&hb_timer, hb_callback, 0);
-	mod_timer(&hb_timer, jiffies + msecs_to_jiffies(5000));
-
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
 			return 0;
 		pr_err("Failed to execute %s (error %d)\n",
 		       ramdisk_execute_command, ret);
-		/* DIAG (M28): sky = ramdisk /init failed to execute
-		 * (falling back to the other init candidates). */
-		breadcrumb(12);
 	}
 
 	/*
@@ -1803,9 +1565,6 @@ static noinline void __init kernel_init_freeable(void)
 
 	smp_prepare_cpus(setup_max_cpus);
 
-	/* DIAG (M26): olive = smp_prepare_cpus done */
-	breadcrumb(6);
-
 	workqueue_init();
 
 	init_mm_internals();
@@ -1815,10 +1574,6 @@ static noinline void __init kernel_init_freeable(void)
 	lockup_detector_init();
 
 	smp_init();
-
-	/* DIAG (M26): navy = smp_init done (secondary bringup finished) */
-	breadcrumb(7);
-
 	sched_init_smp();
 
 	padata_init();
@@ -1828,16 +1583,9 @@ static noinline void __init kernel_init_freeable(void)
 
 	do_basic_setup();
 
-	/* DIAG (M26): teal = do_basic_setup done (all initcalls returned) */
-	breadcrumb(8);
-
 	kunit_run_all_tests();
 
 	console_on_rootfs();
-
-	/* DIAG (M28): coral = console_on_rootfs done, about to
-	 * check the ramdisk init / mount the rootfs. */
-	breadcrumb(9);
 
 	/*
 	 * check if there is an early userspace init.  If yes, let it do all
@@ -1847,11 +1595,6 @@ static noinline void __init kernel_init_freeable(void)
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
 	}
-
-	/* DIAG (M28): indigo = rootfs setup done (prepare_namespace
-	 * ran or was skipped because the ramdisk has /init),
-	 * about to load keys and return to kernel_init. */
-	breadcrumb(10);
 
 	/*
 	 * Ok, we have completed the initial bootup, and
@@ -1863,8 +1606,4 @@ static noinline void __init kernel_init_freeable(void)
 	 */
 
 	integrity_load_keys();
-
-	/* DIAG (M29): crimson = kernel_init_freeable done
-	 * (keys loaded), about to return to kernel_init. */
-	breadcrumb(13);
 }

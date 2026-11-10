@@ -471,11 +471,7 @@ SYM_FUNC_START(__cpu_setup)
 	 * Prepare SCTLR
 	 */
 	mov_q	x0, INIT_SCTLR_EL1_MMU_ON
-	/* DIAG: Kryo 260 is ARMv8.0 and does not implement ITFSB
-	 * (SCTLR_EL1 bit 37, an ARMv8.5 feature). Writing 1 to a
-	 * reserved SCTLR bit is UNPREDICTABLE and can hang the CPU
-	 * when the MMU is enabled. The working 4.19 SCTLR does not
-	 * set ITFSB and does set NTWI, so match it exactly. */
+	/* Kryo 260 is ARMv8.0 and has no ITFSB; match the 4.19 SCTLR. */
 	bic	x0, x0, #SCTLR_ELx_ITFSB
 	orr	x0, x0, #SCTLR_EL1_NTWI
 	ret					// return to head.S

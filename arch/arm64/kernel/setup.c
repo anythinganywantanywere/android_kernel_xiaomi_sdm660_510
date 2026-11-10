@@ -45,7 +45,6 @@
 #include <asm/setup.h>
 #include <asm/smp_plat.h>
 #include <asm/cacheflush.h>
-#include <asm/early_ioremap.h>
 #include <asm/tlbflush.h>
 #include <asm/traps.h>
 #include <asm/efi.h>
@@ -297,78 +296,6 @@ u64 cpu_logical_map(unsigned int cpu)
 	return __cpu_logical_map[cpu];
 }
 
-/*
- * Framebuffer color breadcrumb (whyred 5.10 bringup): repaint the
- * splash framebuffer (phys 0x9d400000, 1080x2160, a8r8g8b8) with
- * the given color. Only valid after paging_init() (linear map up).
- */
-static void __init fb_color_setup(u32 color)
-{
-	volatile u32 *fb = (volatile u32 *)__va(0x9d400000);
-	u32 i;
-
-	for (i = 0; i < 1080 * 2160; i++)
-		fb[i] = color;
-	/* DIAG (M27): bottom bar — marks this as a head.S/setup.c
-	 * checkpoint (breadcrumb stages use white top bars instead).
-	 * White bar, last 24 rows. Flushed together with the fill. */
-	for (i = 2136 * 1080; i < 1080 * 2160; i++)
-		fb[i] = 0xffffffff;
-	__flush_dcache_area((void *)fb, (1080 * 2160) * sizeof(u32));
-}
-
-/*
- * Early variant: same repaint, but via early_ioremap, usable in
- * setup_arch() before the linear map exists (after
- * early_ioremap_init, before setup_machine_fdt). Signals that the
- * kernel reached setup_arch at all.
- *
- * DIAG FIX (M25): the original single early_ioremap() of the whole
- * 9,331,200-byte framebuffer could never succeed — one early-ioremap
- * slot holds only 256 KiB (64 pages), so __early_ioremap() hit
- * WARN_ON(nrpages > NR_FIX_BTMAPS) and returned NULL, and this
- * function silently did nothing in every build. Repaint in 256 KiB
- * chunks instead (36 chunks cover the framebuffer). Device memory
- * is uncached, so a final dsb sy is enough; no dcache flush.
- */
-static void __init fb_color_early(u32 color)
-{
-	u32 chunk_words = (256 * 1024) / sizeof(u32); /* 65536 words */
-	u32 total_words = 1080 * 2160;
-	u32 off;
-
-	for (off = 0; off < total_words; off += chunk_words) {
-		volatile u32 __iomem *fb;
-		u32 n = min(chunk_words, total_words - off);
-		u32 i;
-
-		fb = early_ioremap(0x9d400000 + off * sizeof(u32),
-				   n * sizeof(u32));
-		if (!fb)
-			return;
-		for (i = 0; i < n; i++)
-			fb[i] = color;
-		early_iounmap((void __iomem *)fb, n * sizeof(u32));
-	}
-	/* DIAG (M27): bottom bar — marks this as a head.S/setup.c
-	 * checkpoint (breadcrumb stages use white top bars instead).
-	 * White bar, last 24 rows (103680 bytes, one 256 KiB slot). */
-	{
-		volatile u32 __iomem *bar;
-		u32 n = 24 * 1080;
-		u32 i;
-
-		bar = early_ioremap(0x9d400000 + (2136 * 1080) * sizeof(u32),
-				    n * sizeof(u32));
-		if (bar) {
-			for (i = 0; i < n; i++)
-				bar[i] = 0xffffffff;
-			early_iounmap((void __iomem *)bar, n * sizeof(u32));
-		}
-	}
-	dsb(sy);
-}
-
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	init_mm.start_code = (unsigned long) _text;
@@ -387,11 +314,6 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	early_fixmap_init();
 	early_ioremap_init();
-
-	/* DIAG: lime = setup_arch entered (before setup_machine_fdt).
-	 * M27: lime 0xff7fff00 replaces cyan — every checkpoint
-	 * now has a unique color. */
-	fb_color_early(0xff7fff00);
 
 	setup_machine_fdt(__fdt_pointer);
 
@@ -425,11 +347,6 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	paging_init();
 
-	/* steel blue = paging_init done (linear map up).
-	 * M27: steel blue 0xff4682b4 replaces white — every
-	 * checkpoint now has a unique color. */
-	fb_color_setup(0xff4682b4);
-
 	acpi_table_upgrade();
 
 	/* Parse the ACPI tables for possible boot-time configuration */
@@ -437,9 +354,6 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	if (acpi_disabled)
 		unflatten_device_tree();
-
-	/* DIAG (M25): grey = unflatten_device_tree done */
-	fb_color_setup(0xff808080);
 
 	bootmem_init();
 
@@ -476,9 +390,6 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 			"This indicates a broken bootloader or old kernel\n",
 			boot_args[1], boot_args[2], boot_args[3]);
 	}
-
-	/* DIAG (M25): maroon = setup_arch about to return */
-	fb_color_setup(0xff800000);
 }
 
 static inline bool cpu_can_disable(unsigned int cpu)
