@@ -971,6 +971,9 @@ static void __init breadcrumb(u32 stage)
 		0xff4b0082, /* 10 indigo: rootfs setup done (M28) */
 		0xffffd700, /* 11 gold: about to execute /init (M28) */
 		0xff87ceeb, /* 12 sky: ramdisk /init exec failed (M28) */
+		0xffdc143c, /* 13 crimson: kernel_init_freeable done (M29) */
+		0xff006400, /* 14 dark green: back in kernel_init (M29) */
+		0xff40e0d0, /* 15 turquoise: async init synced (M29) */
 	};
 
 	len = snprintf(msg, sizeof(msg), "BOOT-STAGE=%u\n", stage);
@@ -981,7 +984,7 @@ static void __init breadcrumb(u32 stage)
 	hdr[2] = (u32)len;   /* size */
 	memcpy((void *)data, msg, len);
 	__flush_dcache_area((void *)hdr, 12 + (size_t)len);
-	if (stage >= 1 && stage <= 12)
+	if (stage >= 1 && stage <= 15)
 		fb_color(stage_colors[stage - 1], stage);
 }
 
@@ -1548,8 +1551,14 @@ static int __ref kernel_init(void *unused)
 	int ret;
 
 	kernel_init_freeable();
+	/* DIAG (M29): dark green = kernel_init_freeable returned,
+	 * about to wait for async init and free init memory. */
+	breadcrumb(14);
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
+	/* DIAG (M29): turquoise = async init synced, about to
+	 * free init memory and finalize the mappings. */
+	breadcrumb(15);
 	kprobe_free_init_mem();
 	ftrace_free_init_mem();
 	kgdb_free_init_mem();
@@ -1711,4 +1720,8 @@ static noinline void __init kernel_init_freeable(void)
 	 */
 
 	integrity_load_keys();
+
+	/* DIAG (M29): crimson = kernel_init_freeable done
+	 * (keys loaded), about to return to kernel_init. */
+	breadcrumb(13);
 }
